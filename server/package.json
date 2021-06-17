@@ -1,0 +1,16 @@
+{
+  "name": "rasm_node",
+  "version": "1.0.0",
+  "description": "Node server for compiling Z80 Asm files with RASM. Also for serving DSKs, SNAs, and asm files ",
+  "main": "js/main.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "RASM",
+    "Node",
+    "Z80"
+  ],
+  "author": "Stephane Sikora",
+  "license": "ISC"
+}
