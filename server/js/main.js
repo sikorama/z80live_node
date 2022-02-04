@@ -107,17 +107,21 @@ http.createServer(function (request, response) {
 
           // Si on a une commande build
 
-          // Appeler RASM avec le fichier passé en parametre
-          // Renvoyer le résultat de RASM:
-          // fichier bin, dsk ou sna, ou message d'erreur
+          // Execute RASM
+          // Returns RASM output: bin,dsk or sna and onsole output.
+
           // TODO: On utilise -oa, mais on pourrait controler les noms
           // pour dispatcher dans différents répertoires
-          var options = '-oa -eo'; // eo: si dsk, alors insere le fichier
+          
+          // -eo: if using DSK , insert file 
+          // -oa: output file is named after input file
+          // -utf8: handles characters
+          var options = '-oa -eo -utf8'; 
           // Chaine renvoyée par Rasm. Surtout si le code d'erreur est !=0
           var resStr = "";
           var outputType = 'bin';
           var outputFile = '';
-          var cmd = "../bin/rasm " + fname + " " + options;
+          var cmd = '../bin/rasm ' + fname + ' ' + options;
           console.error('exec command', cmd);
           var child = exec(cmd, { cwd: "./rasm_output/" });
           child.stdout.on('data', function (data) {
