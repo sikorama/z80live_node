@@ -14,8 +14,8 @@ RUN npm install
 WORKDIR /usr/src/app/
 COPY server/ .
 
-
 RUN make -C /usr/src/app/rasm_src
+RUN cp /usr/src/app/rasm_src/rasm.exe /usr/src/app/bin/rasm
 RUN apk del gcc libc-dev 
 EXPOSE 8125
 
