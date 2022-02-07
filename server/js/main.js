@@ -6,7 +6,7 @@ var exec = require('child_process').exec;
 
 
 // Renvoie une erreur (404)
-var respError404 = function (response) {
+function respError404(response) {
   fs.readFile('./404.html', function (error, content) {
     response.writeHead(200, {
       'Content-Type': 'text/html'
@@ -201,18 +201,19 @@ http.createServer(function (request, response) {
       var filePath = './index.html';
       // Empecher de remonter, request.url ne doit pas contenir de ".."
       // if (request.url.indexOf('..')>-1)
+     
       // Cas spéciaux, pour récuperer des fichiers particulier (ico)
       // ou la liste des fichiers (*.asm...)
+     
       var p = request.url.split('?');
       var fname = p[0]; //.substr(1);
 
       if (request.url.length > 1)
         filePath = './rasm_output' + fname;
 
-      console.error(fname, filePath);
-
       var extname = path.extname(filePath);
       var contentType = 'text/html';
+
       switch (extname) {
         case '.js':
           contentType = 'text/javascript';
@@ -232,6 +233,9 @@ http.createServer(function (request, response) {
         case '.wav':
           contentType = 'audio/wav';
           break;
+        case '.ico':
+          contentType= 'image/x-icon';
+          break;
         case '.wasm':
           contentType = 'application/wasm';
           break;
@@ -242,13 +246,15 @@ http.createServer(function (request, response) {
           break;
       }
 
+      console.error(request.url, fname, filePath, extname, contentType);
+
       fs.readFile(filePath, function (error, content) {
         if (error) {
           if (error.code == 'ENOENT') {
             respError(response);
           } else {
             response.writeHead(500);
-            response.end('Sorry, check with the site admin for error: ' + error.code + ' ..\n');
+            response.end('Error: ' + error.code + ' ..\n');
             response.end();
           }
         } else {
