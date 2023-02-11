@@ -176,6 +176,7 @@ http.createServer(function (request, response) {
 
           // On devrait executer depuis ./ et utiliser outputpath et inputpath relatifs a ce path
           let d0=Date.now();
+
           let child = exec(execcmd, { cwd: outputpath+'/' });
 
           child.stdout.on('data', function (data) {
@@ -238,16 +239,17 @@ http.createServer(function (request, response) {
                 filtres.push(o);
             }
 
-            filtres.push('Assmebled in '+ d1-d0 +'ms');
+            const duration =d1-d0;
+            filtres.push('Assembled in '+ duration +'ms');
 
-            var pckt = {
+            const pckt = {
               status: code,
               output: outputFile,
               outputType: outputType,
               stdout: filtres,
               src: fname,
               date: Date.now(),
-              duration: d1-d0
+              duration: duration
             };
 
             console.info("OUTPUT FILE=", outputFile);
