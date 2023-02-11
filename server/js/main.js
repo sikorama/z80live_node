@@ -4,8 +4,8 @@ const path = require('path');
 const exec = require('child_process').exec;
 
 const binpath = '../bin';
-const outputpath = '../output';
-const inputpath = '../output';
+const outputpath = './output';
+const inputpath = './output';
 
 
 // Sends a 404 error
@@ -76,7 +76,7 @@ http.createServer(function (request, response) {
         console.error(pcmd);
         op = pcmd[1];
         fname= pcmd[2];
-        
+
         if (op != 'build' && op != 'store') {
           console.error('Wrong post command', op);
           respError404(response);
@@ -113,6 +113,7 @@ http.createServer(function (request, response) {
       
         // Save file
         let filePath = [inputpath, fname].join('/');
+        console.info('Saving file', filePath);
         fs.writeFile(filePath, body, function (error) {
           if (error) {
             console.error('Write Error', error);
@@ -120,7 +121,7 @@ http.createServer(function (request, response) {
             return;
           }
 
-          // Si c'est uniquement du stockage, on s'arrete la
+          // If only storing, exits now
           if (op != 'build') {
             response.writeHead(200, {
               'Content-Type': 'application/json'
@@ -164,7 +165,7 @@ http.createServer(function (request, response) {
 
           console.info('Exec command', cmd);
 
-          var child = exec(cmd, { cwd: "./output/" });
+          var child = exec(cmd, { cwd: outputpath+'/' });
           child.stdout.on('data', function (data) {
             console.error('std:', data);
             resStr += data;
