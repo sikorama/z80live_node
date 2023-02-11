@@ -10,6 +10,13 @@ build_rasm:
 	cp server/rasm_src/rasm server/bin/
 
 
+
+build_uz80:
+
+
+build_sjasm:
+
+
 post_src:
 	curl --data-binary @test.asm -X POST http://localhost:8125/test.asm
 

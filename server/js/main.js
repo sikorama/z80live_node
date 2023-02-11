@@ -1,11 +1,14 @@
-var http = require('http');
-var fs = require('fs');
-var path = require('path');
-var exec = require('child_process').exec;
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const exec = require('child_process').exec;
+
+const binpath = '../bin';
+const outputpath = '../output';
+const inputpath = '../output';
 
 
-
-// Renvoie une erreur (404)
+// Sends a 404 error
 function respError404(response) {
   fs.readFile('./404.html', function (error, content) {
     response.writeHead(200, {
@@ -15,18 +18,18 @@ function respError404(response) {
   });
 }
 
-var respError = function (response,content) {
-    response.writeHead(200, {
-      'Content-Type': 'application/json'
-    });
-    response.end(content, 'utf-8');
+function respError(response, content) {
+  response.writeHead(200, {
+    'Content-Type': 'application/json'
+  });
+  response.end(content, 'utf-8');
 }
+
+
 
 
 http.createServer(function (request, response) {
   try {
-    //    console.log('< ', request.url, request.method);
-
     // Website you wish to allow to connect
     response.setHeader('Access-Control-Allow-Origin', '*');
     // Request methods you wish to allow
@@ -38,23 +41,40 @@ http.createServer(function (request, response) {
     // to the API (e.g. in case you use sessions)
     //response.setHeader('Access-Control-Allow-Credentials', true);
 
-    // Requete POST??
+    // handle POST Request, to assemble files
+
+    // URL format:
+    // command/main_filename?param1=value1&param2=value2...
+    // parameters:
+    // asm=[sjaspmlus|rasm|uz80]
+
+
+
+    // FIXME: globals....
+
+  
     if (request.method == 'POST') {
-      console.log('POST request', request.url);
+
+      console.log('POST request URL=', request.url);
+
       if (request.url.length == 0) {
         respError404(response);
         return;
       }
 
-      // On sépare les params
+      let p, cmd, pcmd, op;
+      var fname = pcmd[2];
+      var params = [];
+   
+      // parse URL
+      // TODO: cleanup this code (use standard libs)
       try {
-
-        var p = request.url.split('?');
-        var cmd = p[0];
-        console.error(cmd);
-        var pcmd = cmd.split('/');
+        p = request.url.split('?');
+        cmd = p[0];
+        console.info('cmd=', cmd);
+        pcmd = cmd.split('/');
         console.error(pcmd);
-        var op = pcmd[1];
+        op = pcmd[1];
 
         if (op != 'build' && op != 'store') {
           console.error('Wrong post command', op);
@@ -62,15 +82,14 @@ http.createServer(function (request, response) {
           return;
         }
 
-        var fname = pcmd[2];
-
-        var params = [];
         if (p.length > 1)
           params = p[1].split('&');
 
       } catch (e) {
         console.error('Error parsing URL', e.stack);
       }
+
+
       // Si c'est un fichier DSK ou SNA, on le stocke
       // Si c'est un fichier ASM, on le stocke et on execute RASM
       // Sinon on renvoie un objet qui contient
@@ -80,19 +99,23 @@ http.createServer(function (request, response) {
       // En mode data,on renvoie le binaire généré par rasm
       // en cas de non erreur
 
-      var body = ''
+      var body = '';
       request.on('data', function (data) {
-        body += data
+        body += data;
       });
 
       request.on('end', function () {
         //console.log('Body: ' + body);
 
-        var filePath = "rasm_output/" + fname; // en attendant de trouver le nom
+        // Default variables
+        let asm = 'rasm';
+      
+        // Save file
+        let filePath = [inputpath, fname].join('/');
         fs.writeFile(filePath, body, function (error) {
           if (error) {
             console.error('Write Error', error);
-            respError(response,'Write Error');
+            respError(response, 'Write Error');
             return;
           }
 
@@ -112,18 +135,35 @@ http.createServer(function (request, response) {
 
           // TODO: On utilise -oa, mais on pourrait controler les noms
           // pour dispatcher dans différents répertoires
-          
-          // -eo: if using DSK , insert file 
-          // -oa: output file is named after input file
-          // -utf8: handles characters
-          var options = '-oa -eo -utf8'; 
-          // Chaine renvoyée par Rasm. Surtout si le code d'erreur est !=0
-          var resStr = "";
-          var outputType = 'bin';
-          var outputFile = '';
-          var cmd = '../bin/rasm ' + fname + ' ' + options;
-          console.error('exec command', cmd);
-          var child = exec(cmd, { cwd: "./rasm_output/" });
+
+          // String returned by the assembler
+          let resStr = "";
+          let outputType = 'bin';
+          let outputFile = '';
+
+
+
+
+          const asm_options = {
+            // -eo: if using DSK , insert file 
+            // -oa: output file is named after input file
+            // -utf8: handles characters
+            'rasm': '-oa -eo -utf8',
+            'uz80': '',
+            'sjasmplus': ''
+          };
+
+          let options = '';
+          if (asm_options.hasOwnProperty(asm)) {
+            options = asm_options[asm];
+          }
+
+          let asmcmd = [binpath, asm].join('/');
+          let cmd = [asmcmd, fname, options].join(' ');
+
+          console.info('Exec command', cmd);
+
+          var child = exec(cmd, { cwd: "./output/" });
           child.stdout.on('data', function (data) {
             console.error('std:', data);
             resStr += data;
@@ -139,24 +179,25 @@ http.createServer(function (request, response) {
           });
 
           child.on('close', function (code) {
-            resArr = resStr.split('\n');
-            regex = new RegExp(fname, 'g');
+            let resArr = resStr.split('\n');
+            let regex = new RegExp(fname, 'g');
             let filtres = [];
+
             // On cherche a recuperer le nom du fichier généré
             // Avec des chaines comme:
             outputType = 'bin';
-            typeStrings = [
+            const typeStrings = [
               ['bin', 'Write binary file '],
               ['dsk', 'Write edsk file '],
               ['sna', 'Write snapshot v3 file '],
               ['sna', 'Write snapshot v2 file ']
-            ]
+            ];
 
-            for (j = 0; j < resArr.length; j++) {
-              pline = resArr[j];
-              for (var i = 0; i < typeStrings.length; i++) {
-                binstr = typeStrings[i][1];
-                var i0 = pline.indexOf(binstr);
+            for (let j = 0; j < resArr.length; j++) {
+              let pline = resArr[j];
+              for (let i = 0; i < typeStrings.length; i++) {
+                let binstr = typeStrings[i][1];
+                let i0 = pline.indexOf(binstr);
 
                 if (i0 >= 0) {
                   outputType = typeStrings[i][0];
@@ -170,7 +211,7 @@ http.createServer(function (request, response) {
               let o = pline.replace(/.\[[0-9]+m/g, '');
               //  Remplace le nom du fichier
               o = o.replace(fname, "source");
-              if (o.length>0)
+              if (o.length > 0)
                 filtres.push(o);
 
             }
@@ -196,23 +237,28 @@ http.createServer(function (request, response) {
       });
     }
 
-    // Requete GET?
+    // handle GET Request, to retrieve files
     if (request.method == 'GET') {
-      var filePath = './index.html';
-      // Empecher de remonter, request.url ne doit pas contenir de ".."
-      // if (request.url.indexOf('..')>-1)
-     
-      // Cas spéciaux, pour récuperer des fichiers particulier (ico)
-      // ou la liste des fichiers (*.asm...)
-     
-      var p = request.url.split('?');
-      var fname = p[0]; //.substr(1);
+      let filePath = './index.html';
+
+      // Safety filters
+      if (request.url.indexOf('..') > -1) {
+        console.error('URL contains ".."');
+        return;
+      }
+
+      let p = request.url.split('?');
+      let fname = p[0];
+
+      // URL format
+      // filename?param=1&param2=value2  
+      // Parameters are ignored
 
       if (request.url.length > 1)
-        filePath = './rasm_output' + fname;
+        filePath = './output' + fname;
 
-      var extname = path.extname(filePath);
-      var contentType = 'text/html';
+      let extname = path.extname(filePath);
+      let contentType = 'text/html';
 
       switch (extname) {
         case '.js':
@@ -234,7 +280,7 @@ http.createServer(function (request, response) {
           contentType = 'audio/wav';
           break;
         case '.ico':
-          contentType= 'image/x-icon';
+          contentType = 'image/x-icon';
           break;
         case '.wasm':
           contentType = 'application/wasm';
@@ -246,7 +292,7 @@ http.createServer(function (request, response) {
           break;
       }
 
-      console.error(request.url, fname, filePath, extname, contentType);
+      console.info('GET', request.url, fname, filePath, extname, contentType);
 
       fs.readFile(filePath, function (error, content) {
         if (error) {
@@ -265,35 +311,10 @@ http.createServer(function (request, response) {
         }
       });
 
-    } // GET
-
+    }
   } catch (e) {
     console.error(e.stack);
   }
-
 }).listen(8125);
 
 console.log('Server running at http://127.0.0.1:8125/');
-
-
-
-/*
-fs.readFile(filePath, function(error, content) {
-  console.error('read',filepath, error);
-  if (error) {
-    if (error.code == 'ENOENT') {
-      respError(response);
-    } else {
-      response.writeHead(500);
-      response.end('Sorry, check with the site admin for error: ' + error.code + ' ..\n');
-      response.end();
-    }
-  } else {
-    console.error('send data');
-    response.writeHead(200, {
-      'Content-Type': 'application/octet-stream'
-    });
-    response.end(content, 'utf-8');
-  }
-});
-*/
