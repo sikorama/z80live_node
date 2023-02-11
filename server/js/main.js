@@ -63,7 +63,7 @@ http.createServer(function (request, response) {
       }
 
       let p, cmd, pcmd, op;
-      var fname = pcmd[2];
+      var fname 
       var params = [];
    
       // parse URL
@@ -75,7 +75,8 @@ http.createServer(function (request, response) {
         pcmd = cmd.split('/');
         console.error(pcmd);
         op = pcmd[1];
-
+        fname= pcmd[2];
+        
         if (op != 'build' && op != 'store') {
           console.error('Wrong post command', op);
           respError404(response);
