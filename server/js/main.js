@@ -4,9 +4,11 @@ const path = require('path');
 const exec = require('child_process').exec;
 
 const binpath = '../bin';
-const outputpath = './output';
-const inputpath = './output';
 
+const outputpath = './output';
+// Currently input files ares storerd in output folder
+// Need first to fix assemblers params
+const inputpath = './output';
 
 // Sends a 404 error
 function respError404(response) {
@@ -63,7 +65,7 @@ http.createServer(function (request, response) {
       }
 
       let p, cmd, pcmd, op;
-      var fname 
+      var fname;
       var params = [];
    
       // parse URL
@@ -161,11 +163,21 @@ http.createServer(function (request, response) {
           }
 
           let asmcmd = [binpath, asm].join('/');
-          let cmd = [asmcmd, fname, options].join(' ');
 
-          console.info('Exec command', cmd);
 
-          var child = exec(cmd, { cwd: outputpath+'/' });
+          let execcmd = [
+            'timeout -t 10', 
+            asmcmd, 
+            fname, 
+            options
+          ].join(' ');
+
+          console.info('Exec command', execcmd);
+
+          // On devrait executer depuis ./ et utiliser outputpath et inputpath relatifs a ce path
+          let d0=Date.now();
+          let child = exec(execcmd, { cwd: outputpath+'/' });
+
           child.stdout.on('data', function (data) {
             console.error('std:', data);
             resStr += data;
@@ -181,17 +193,25 @@ http.createServer(function (request, response) {
           });
 
           child.on('close', function (code) {
+
+            let d1= Date.now();
+
             let resArr = resStr.split('\n');
             let regex = new RegExp(fname, 'g');
             let filtres = [];
 
             // On cherche a recuperer le nom du fichier généré
-            // Avec des chaines comme:
-            outputType = 'bin';
+            // FIXME: méthod bancale, on devrait le savoir à l'avance :)
+            // FIXME: Ne marche que pour rasm
+
+            // TODO: utiliser le code js pour generer des snas
+
+           outputType = 'bin';
+            // rasm
             const typeStrings = [
               ['bin', 'Write binary file '],
               ['dsk', 'Write edsk file '],
-              ['sna', 'Write snapshot v3 file '],
+              ['sna', 'Write snapshot v3 file '], 
               ['sna', 'Write snapshot v2 file ']
             ];
 
@@ -209,14 +229,16 @@ http.createServer(function (request, response) {
                 }
               }
 
-              // Filtre la sortie (code ansi)
+
+              // Filtre la sortie (code ansi) (rasm only)
               let o = pline.replace(/.\[[0-9]+m/g, '');
               //  Remplace le nom du fichier
               o = o.replace(fname, "source");
               if (o.length > 0)
                 filtres.push(o);
-
             }
+
+            filtres.push('Assmebled in '+ d1-d0 +'ms');
 
             var pckt = {
               status: code,
@@ -224,7 +246,8 @@ http.createServer(function (request, response) {
               outputType: outputType,
               stdout: filtres,
               src: fname,
-              date: Date.now()
+              date: Date.now(),
+              duration: d1-d0
             };
 
             console.info("OUTPUT FILE=", outputFile);
