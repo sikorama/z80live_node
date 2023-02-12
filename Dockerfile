@@ -1,6 +1,6 @@
 FROM node:9-alpine
 
-RUN apk update && apk add make gcc tzdata libc-dev
+RUN apk update && apk add make gcc g++ tzdata libc-dev
 #  tzdata \
 #  make
 
@@ -14,10 +14,16 @@ RUN npm install
 WORKDIR /usr/src/app/
 COPY server/ .
 
-RUN make -C /usr/src/app/rasm_src
-RUN cp /usr/src/app/rasm_src/rasm.exe /usr/src/app/bin/rasm
+#Compile assemblers
+RUN make -C /usr/src/app/asm_src/rasm
+RUN cp /usr/src/app/asm_src/rasm/rasm.exe /usr/src/app/bin/rasm
+
+RUN USE_LUA=0 make -C /usr/src/app/asm_src/sjasmplus
+RUN cp /usr/src/app/asm_src/sjasmplus/sjasmplus /usr/src/app/bin/sjasmplus
+
+
 RUN apk del gcc libc-dev 
 EXPOSE 8125
 
-
+WORKDIR /usr/src/app/server/
 CMD [ "node" ,"js/main.js" ]

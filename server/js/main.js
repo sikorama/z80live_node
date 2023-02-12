@@ -3,12 +3,33 @@ const fs = require('fs');
 const path = require('path');
 const exec = require('child_process').exec;
 
-const binpath = '../bin';
+//console.info('process path', process.execPath);
+console.info('process argv', process.execArgv);
+//console.debug('process env', process.env);
 
-const outputpath = './output';
+// Default relative paths
+// Should be relative to server folder
+// Can be changed using ENV variables
+let binpath = './bin';
+let outputpath = './output';
+
 // Currently input files ares storerd in output folder
-// Need first to fix assemblers params
-const inputpath = './output';
+// Need first to fix assemblers params & folders
+let inputpath = './output';
+let timeout_cmd = ''; //timeout 10' or 'timeout -t 10';
+
+if (process.env.hasOwnProperty('BINPATH')) {binpath=process.env.BINPATH;}
+if (process.env.hasOwnProperty('OUTPUTPATH')) {outputpath=process.env.OUTPUTPATH;}
+if (process.env.hasOwnProperty('INPUTPATH')) {inputpath=process.env.INPUTPATH;}
+if (process.env.hasOwnProperty('TIMEOUTCMD')) {timeout_cmd=process.env.TIMEOUTCMD;}
+
+
+console.info('PWD :\t\t', process.env.PWD);
+console.info('Bin path :\t', binpath);
+console.info('Input path :\t', inputpath);
+console.info('Output path :\t', outputpath);
+console.info('Timeout Cmd :\t', timeout_cmd);
+
 
 // Sends a 404 error
 function respError404(response) {
@@ -26,8 +47,6 @@ function respError(response, content) {
   });
   response.end(content, 'utf-8');
 }
-
-
 
 
 http.createServer(function (request, response) {
@@ -57,7 +76,7 @@ http.createServer(function (request, response) {
   
     if (request.method == 'POST') {
 
-      console.log('POST request URL=', request.url);
+      console.log('>>> POST request URL=', request.url);
 
       if (request.url.length == 0) {
         respError404(response);
@@ -108,7 +127,7 @@ http.createServer(function (request, response) {
       });
 
       request.on('end', function () {
-        //console.log('Body: ' + body);
+        console.info('Body length:', body.length,'bytes');
 
         // Default variables
         let asm = 'rasm';
@@ -145,12 +164,9 @@ http.createServer(function (request, response) {
           let outputType = 'bin';
           let outputFile = '';
 
-
-
-
           const asm_options = {
             // -eo: if using DSK , insert file 
-            // -oa: output file is named after input file
+            // -oa: output file is named after input file (FIXME!)
             // -utf8: handles characters
             'rasm': '-oa -eo -utf8',
             'uz80': '',
@@ -164,20 +180,21 @@ http.createServer(function (request, response) {
 
           let asmcmd = [binpath, asm].join('/');
 
-
-          let execcmd = [
-            'timeout -t 10', 
-            asmcmd, 
-            fname, 
-            options
-          ].join(' ');
+          let execcmd_array = [];
+          if (timeout_cmd.length>0) execcmd_array.push(timeout_cmd);
+          execcmd_array.push(asmcmd);
+          execcmd_array.push(filePath);
+          execcmd_array.push(options);
+          
+          // filter empty strings?
+          let execcmd=execcmd_array.join(' ');
 
           console.info('Exec command', execcmd);
 
           // On devrait executer depuis ./ et utiliser outputpath et inputpath relatifs a ce path
           let d0=Date.now();
 
-          let child = exec(execcmd, { cwd: outputpath+'/' });
+          let child = exec(execcmd, /*{ cwd: outputpath+'/' }*/);
 
           child.stdout.on('data', function (data) {
             console.error('std:', data);
@@ -240,6 +257,7 @@ http.createServer(function (request, response) {
             }
 
             const duration =d1-d0;
+            // Deprecated (use result packet instead)
             filtres.push('Assembled in '+ duration +'ms');
 
             const pckt = {
