@@ -107,8 +107,9 @@ http.createServer(function (request, response) {
       let resStr = "";
 
       let outputType = 'bin';
-      let outputFile = '';
-
+      let outputFile = 'default';
+      let outputFileFullPath='output/default';
+  
       // parse URL
       // TODO: cleanup this code (use standard libs)
       try {
@@ -120,16 +121,29 @@ http.createServer(function (request, response) {
         if (!params.assembler) params.assembler = "rasm";
         if (!params.buildmode) params.buildmode = "sna";
         if (params.buildmode==="sna") params.buildmode = "sna_cpc464";
+        if (params.buildmode==="tap") params.buildmode = "tap_zx48";
         if (!params.startAddress) params.startAddress = 0x1000;
         if (!params.entryPoint) params.entryPoint = params.startAddress;
 
-        outputType = params.buildmode;
 
-        if (params.assembler===('rasm')) {
-          outputFile = params.filename + '.'+outputType;
-        }
-        else 
-          outputFile = './output/'+params.filename + '.'+outputType;
+        const extensions = {
+          sna_cpc464: 'sna',
+          sna_cpc6128: 'sna',
+          sna_zx48: 'sna',
+          sna_zx6128: 'sna',
+          tap_zx48: 'sna',
+          dsk: 'dsk',
+          bin: 'bin',
+        };
+
+        outputType = params.buildmode;
+        // TODO: remove .asm 
+        outputFile = params.filename + '.'+extensions[outputType];
+  
+        outputFileFullPath=outputFile;
+        
+        if (params.assembler!=='rasm') 
+          outputFileFullPath = outputpath + params.filename + '.'+extensions[outputType];
 
         console.info('params=', params);
         console.info('outputType=', outputType);
@@ -235,25 +249,25 @@ http.createServer(function (request, response) {
           const footers = {
             sna_cpc464: {
               //                rasm: 'BUILDSNA V2 : BANKSET 0\n',
-              sjasmplus: ' SAVECPCSNA "' + outputFile + '", ' + params.entryPoint,
+              sjasmplus: ' SAVECPCSNA "' + outputFileFullPath + '", ' + params.entryPoint,
               //                uz80: ''
             },
             sna_cpc6128: {
               //                rasm: 'BUILDSNA V2 : BANKSET 0\n',
-              sjasmplus: ' SAVECPCSNA "' + outputFile + '", ' + params.entryPoint,
+              sjasmplus: ' SAVECPCSNA "' + outputFileFullPath + '", ' + params.entryPoint,
               //                uz80: ''
             },
             dsk: {
             },
             sna_zx48: {
-              sjasmplus: ' SAVESNA "' + outputFile + '", ' + params.entryPoint,
+              sjasmplus: ' SAVESNA "' + outputFileFullPath + '", ' + params.entryPoint,
             },
             tap: {
-              sjasmplus: ' SAVETAP "' + outputFile + '", ' + params.entryPoint,
+              sjasmplus: ' SAVETAP "' + outputFileFullPath + '", ' + params.entryPoint,
             },
             sna_zx128: {
               sna: {
-                sjasmplus: ' SAVESNA "' + outputFile + '", ' + params.entryPoint,
+                sjasmplus: ' SAVESNA "' + outputFileFullPath + '", ' + params.entryPoint,
               }
             }
           };
@@ -364,18 +378,20 @@ http.createServer(function (request, response) {
 
             for (let j = 0; j < resArr.length; j++) {
               let pline = resArr[j];
+              /*
               for (let i = 0; i < typeStrings.length; i++) {
-                let binstr = typeStrings[i][1];
-                let i0 = pline.indexOf(binstr);
+                //let binstr = typeStrings[i][1];
+                //let i0 = pline.indexOf(binstr);
 
-                if (i0 >= 0) {
-                  outputType = typeStrings[i][0];
-                  var subs = pline.substr(i0 + binstr.length);
+                //if (i0 >= 0) {
+                 // outputType = typeStrings[i][0];
+                  //var subs = pline.substr(i0 + binstr.length);
                   // On récupere le nom de fichier qui commence en i0+binstr.lengh, et qui va jusqu'au prochain espace ou retour chariot
-                  outputFile = subs.split(' ')[0];
-                }
-              }
+                 // outputFile = subs.split(' ')[0];
+                //}
 
+              }
+            */
 
               // Filter output (ansi code) (rasm only)
               let o = pline.replace(/.\[[0-9]+m/g, '');
