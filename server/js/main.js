@@ -108,20 +108,20 @@ http.createServer(function (request, response) {
 
       let outputType = 'bin';
       let outputFile = 'default';
-      let outputFileFullPath=outputpath+'/default';
-  
+      let outputFileFullPath = outputpath + '/default';
+
       // parse URL
       // TODO: cleanup this code (use standard libs)
       try {
 
         params = getparams(request);
-       
+
         //if (params.assembler) asm=params.assembler;
 
         if (!params.assembler) params.assembler = "rasm";
         if (!params.buildmode) params.buildmode = "sna";
-        if (params.buildmode==="sna") params.buildmode = "sna_cpc464";
-        if (params.buildmode==="tap") params.buildmode = "tap_zx48";
+        if (params.buildmode === "sna") params.buildmode = "sna_cpc464";
+        if (params.buildmode === "tap") params.buildmode = "tap_zx48";
         if (!params.startAddress) params.startAddress = 0x1000;
         if (!params.entryPoint) params.entryPoint = params.startAddress;
 
@@ -138,12 +138,14 @@ http.createServer(function (request, response) {
 
         outputType = params.buildmode;
         // TODO: remove .asm 
-        outputFile = params.filename + '.'+extensions[outputType];
-  
-        outputFileFullPath=outputFile;
-        
-        if (params.assembler!=='rasm') 
-          outputFileFullPath = outputpath + '/'+params.filename + '.'+extensions[outputType];
+
+
+        outputFile = params.filename.replace(/.asm$/, '') + '.' + extensions[outputType];
+
+        outputFileFullPath = outputFile;
+
+        if (params.assembler !== 'rasm')
+          outputFileFullPath = outputpath + '/' + params.filename.replace(/.asm$/, '') + '.' + extensions[outputType];
 
         console.info('params=', params);
         console.info('outputType=', outputType);
@@ -204,12 +206,12 @@ http.createServer(function (request, response) {
         const headers = {
           sna_cpc464: {
             rasm: 'BUILDSNA V2 : BANKSET 0',
-            sjasmplus: ' DEVICE AMSTRADCPC464: org '+params.startAddress,
+            sjasmplus: ' DEVICE AMSTRADCPC464: org ' + params.startAddress,
             //            uz80: ''
           },
           sna_cpc6128: {
             rasm: 'BUILDSNA V2 : BANKSET 0',
-            sjasmplus: ' DEVICE AMSTRADCPC6128 : org '+params.startAddress,
+            sjasmplus: ' DEVICE AMSTRADCPC6128 : org ' + params.startAddress,
             //            uz80: ''
           },
           dsk: {
@@ -274,7 +276,7 @@ http.createServer(function (request, response) {
 
           if (footers[params.buildmode]) {
             if (footers[params.buildmode][params.assembler]) {
-              footer = footers[params.buildmode][params.assembler] + '\n'
+              footer = footers[params.buildmode][params.assembler] + '\n';
               console.info('Adding footer', footer);
             }
           }
@@ -363,44 +365,44 @@ http.createServer(function (request, response) {
 
             // TODO: utiliser le code js pour generer des snas
 
-            if (params.assembler==='rasm') {
+            if (params.assembler === 'rasm') {
 
-            filtres = [];
+              filtres = [];
 
-            //outputType = 'bin';
-            // parse rasm output (deprecated)
-            const typeStrings = [
-              ['bin', 'Write binary file '],
-              ['dsk', 'Write edsk file '],
-              ['sna', 'Write snapshot v3 file '],
-              ['sna', 'Write snapshot v2 file ']
-            ];
+              //outputType = 'bin';
+              // parse rasm output (deprecated)
+              const typeStrings = [
+                ['bin', 'Write binary file '],
+                ['dsk', 'Write edsk file '],
+                ['sna', 'Write snapshot v3 file '],
+                ['sna', 'Write snapshot v2 file ']
+              ];
 
-            for (let j = 0; j < resArr.length; j++) {
-              let pline = resArr[j];
-              /*
-              for (let i = 0; i < typeStrings.length; i++) {
-                //let binstr = typeStrings[i][1];
-                //let i0 = pline.indexOf(binstr);
+              for (let j = 0; j < resArr.length; j++) {
+                let pline = resArr[j];
+                /*
+                for (let i = 0; i < typeStrings.length; i++) {
+                  //let binstr = typeStrings[i][1];
+                  //let i0 = pline.indexOf(binstr);
+  
+                  //if (i0 >= 0) {
+                   // outputType = typeStrings[i][0];
+                    //var subs = pline.substr(i0 + binstr.length);
+                    // On récupere le nom de fichier qui commence en i0+binstr.lengh, et qui va jusqu'au prochain espace ou retour chariot
+                   // outputFile = subs.split(' ')[0];
+                  //}
+  
+                }
+              */
 
-                //if (i0 >= 0) {
-                 // outputType = typeStrings[i][0];
-                  //var subs = pline.substr(i0 + binstr.length);
-                  // On récupere le nom de fichier qui commence en i0+binstr.lengh, et qui va jusqu'au prochain espace ou retour chariot
-                 // outputFile = subs.split(' ')[0];
-                //}
-
+                // Filter output (ansi code) (rasm only)
+                let o = pline.replace(/.\[[0-9]+m/g, '');
+                //  Remplace le nom du fichier
+                o = o.replace(fname, "source");
+                if (o.length > 0)
+                  filtres.push(o);
               }
-            */
-
-              // Filter output (ansi code) (rasm only)
-              let o = pline.replace(/.\[[0-9]+m/g, '');
-              //  Remplace le nom du fichier
-              o = o.replace(fname, "source");
-              if (o.length > 0)
-                filtres.push(o);
             }
-          }
 
 
             const duration = d1 - d0;
