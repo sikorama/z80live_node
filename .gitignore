@@ -1,0 +1,5 @@
+*.asm
+*.sna
+server/bin/rasm
+server/bin/sjasmplus
+server/bin/uz80

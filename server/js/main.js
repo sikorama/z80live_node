@@ -11,11 +11,11 @@ console.info('process argv', process.execArgv);
 // Should be relative to server folder
 // Can be changed using ENV variables
 let binpath = './bin';
-let outputpath = './output';
+let outputpath = './output'; // no trailing /
 
 // Currently input files ares storerd in output folder
 // Need first to fix assemblers params & folders
-let inputpath = './output';
+let inputpath = './output'; // no trailing /
 let timeout_cmd = ''; //timeout 10' or 'timeout -t 10';
 
 if (process.env.hasOwnProperty('BINPATH')) { binpath = process.env.BINPATH; }
@@ -108,7 +108,7 @@ http.createServer(function (request, response) {
 
       let outputType = 'bin';
       let outputFile = 'default';
-      let outputFileFullPath='output/default';
+      let outputFileFullPath=outputpath+'/default';
   
       // parse URL
       // TODO: cleanup this code (use standard libs)
@@ -143,11 +143,11 @@ http.createServer(function (request, response) {
         outputFileFullPath=outputFile;
         
         if (params.assembler!=='rasm') 
-          outputFileFullPath = outputpath + params.filename + '.'+extensions[outputType];
+          outputFileFullPath = outputpath + '/'+params.filename + '.'+extensions[outputType];
 
         console.info('params=', params);
         console.info('outputType=', outputType);
-        console.info('outputFile=', outputFile);
+        console.info('File=', outputFile);
 
         p = request.url.split('?');
         cmd = p[0];
@@ -248,7 +248,7 @@ http.createServer(function (request, response) {
 
           const footers = {
             sna_cpc464: {
-              //                rasm: 'BUILDSNA V2 : BANKSET 0\n',
+              //                rasm: 'BUILDSNA V2 : BANKSET 0 : RUN '+params.entryPoint ,
               sjasmplus: ' SAVECPCSNA "' + outputFileFullPath + '", ' + params.entryPoint,
               //                uz80: ''
             },
@@ -452,7 +452,7 @@ http.createServer(function (request, response) {
       // Parameters are ignored
 
       if (request.url.length > 1)
-        filePath = './output' + fname;
+        filePath = outputpath + '/' + fname;
 
       let extname = path.extname(filePath);
       let contentType = 'text/html';

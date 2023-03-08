@@ -22,8 +22,8 @@ RUN USE_LUA=0 make -C /usr/src/app/asm_src/sjasmplus
 RUN cp /usr/src/app/asm_src/sjasmplus/sjasmplus /usr/src/app/bin/sjasmplus
 
 
-RUN apk del gcc libc-dev 
+#RUN apk del gcc libc-dev 
 EXPOSE 8125
 
-WORKDIR /usr/src/app/server/
+
 CMD [ "node" ,"js/main.js" ]
