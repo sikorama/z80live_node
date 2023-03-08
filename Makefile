@@ -1,5 +1,8 @@
-node:
+node: clean
 	cd server && nodejs js/main.js
+
+clean:
+	rm -f server/output/temp_*
 
 clone_rasm:
 	cd server && git clone https://github.com/EdouardBERGE/rasm.git rasm_src
