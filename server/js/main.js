@@ -222,19 +222,13 @@ http.createServer(function (request, response) {
             //            uz80: ''
           },
           sna_zx48: {
-            sna: {
               sjasmplus: ' DEVICE ZXSPECTRUM48'
-            }
           },
           tap_zx48: {
-            sna: {
               sjasmplus: ' DEVICE ZXSPECTRUM48'
-            }
           },
           sna_zx128: {
-            sna: {
               sjasmplus: ' DEVICE ZXSPECTRUM128'
-            }
           }
         };
 
