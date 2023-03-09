@@ -130,8 +130,10 @@ http.createServer(function (request, response) {
           sna_cpc464: 'sna',
           sna_cpc6128: 'sna',
           sna_zx48: 'sna',
-          sna_zx6128: 'sna',
-          tap_zx48: 'sna',
+          sna_zx128: 'sna',
+          sna: 'tap',
+          tap: 'tap',
+          tap_zx48: 'tap',
           dsk: 'dsk',
           bin: 'bin',
         };
