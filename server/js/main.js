@@ -487,7 +487,9 @@ http.createServer(function (request, response) {
         case '.dsk':
         case '.bin':
         case '.sna':
-          contentType = 'application/octet-stream';
+        case '.tap':
+        case '.z80':
+            contentType = 'application/octet-stream';
           break;
       }
 
