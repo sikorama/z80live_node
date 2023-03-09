@@ -227,6 +227,9 @@ http.createServer(function (request, response) {
           tap_zx48: {
               sjasmplus: ' DEVICE ZXSPECTRUM48'
           },
+          tap: {
+            sjasmplus: ' DEVICE ZXSPECTRUM48'
+          },
           sna_zx128: {
               sjasmplus: ' DEVICE ZXSPECTRUM128'
           }
@@ -263,10 +266,11 @@ http.createServer(function (request, response) {
             tap: {
               sjasmplus: ' SAVETAP "' + outputFileFullPath + '", ' + params.entryPoint,
             },
+            tap_zx48: {
+              sjasmplus: ' SAVETAP "' + outputFileFullPath + '", ' + params.entryPoint,
+            },
             sna_zx128: {
-              sna: {
                 sjasmplus: ' SAVESNA "' + outputFileFullPath + '", ' + params.entryPoint,
-              }
             }
           };
 
