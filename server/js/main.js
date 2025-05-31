@@ -1,521 +1,695 @@
-const http = require('http');
-const fs = require('fs');
+const express = require('express');
+const fs = require('fs').promises;
 const path = require('path');
-const exec = require('child_process').exec;
+const { exec, spawn } = require('child_process');
+const { promisify } = require('util');
+const multer = require('multer');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const pidusage = require('pidusage');
 
-//console.info('process path', process.execPath);
-console.info('process argv', process.execArgv);
-//console.debug('process env', process.env);
+const execAsync = promisify(exec);
 
-// Default relative paths
-// Should be relative to server folder
-// Can be changed using ENV variables
-let binpath = './bin';
-let outputpath = './output'; // no trailing /
+class Z80AssemblerServer {
+  constructor() {
+    this.app = express();
+    this.port = process.env.PORT || 8125;
+    
+    // Configuration des chemins
+    this.config = {
+      binPath: process.env.BINPATH || './bin',
+      outputPath: process.env.OUTPUTPATH || './output',
+      inputPath: process.env.INPUTPATH || './output',
+      timeoutCmd: process.env.TIMEOUTCMD || '',
+      maxFileSize: '10MB',
+      allowedOrigins: process.env.ALLOWED_ORIGINS?.split(',') || ['*'],
+      // Limites de ressources
+      maxExecutionTime: parseInt(process.env.MAX_EXECUTION_TIME) || 10000, // 10 secondes
+      maxMemoryMB: parseInt(process.env.MAX_MEMORY_MB) || 300, // 300 MB
+      memoryCheckInterval: 1000, // Vérification mémoire toutes les 1s
+      killSignalTimeout: 5000 // Timeout pour SIGKILL après SIGTERM
+    };
 
-// Currently input files ares storerd in output folder
-// Need first to fix assemblers params & folders
-let inputpath = './output'; // no trailing /
-let timeout_cmd = ''; //timeout 10' or 'timeout -t 10';
-
-if (process.env.hasOwnProperty('BINPATH')) { binpath = process.env.BINPATH; }
-if (process.env.hasOwnProperty('OUTPUTPATH')) { outputpath = process.env.OUTPUTPATH; }
-if (process.env.hasOwnProperty('INPUTPATH')) { inputpath = process.env.INPUTPATH; }
-if (process.env.hasOwnProperty('TIMEOUTCMD')) { timeout_cmd = process.env.TIMEOUTCMD; }
-
-
-console.info('PWD :\t\t', process.env.PWD);
-console.info('Bin path :\t', binpath);
-console.info('Input path :\t', inputpath);
-console.info('Output path :\t', outputpath);
-console.info('Timeout Cmd :\t', timeout_cmd);
-
-
-// Sends a 404 error
-function respError404(response) {
-  fs.readFile('./404.html', function (error, content) {
-    response.writeHead(200, {
-      'Content-Type': 'text/html'
-    });
-    response.end(content, 'utf-8');
-  });
-}
-
-function respError(response, content) {
-  response.writeHead(200, {
-    'Content-Type': 'application/json'
-  });
-  response.end(content, 'utf-8');
-}
-
-function getparams(req) {
-  let q = req.url.split('?'), result = {};
-  if (q.length >= 2) {
-    q[1].split('&').forEach((item) => {
-      try {
-        result[item.split('=')[0]] = decodeURIComponent(item.split('=')[1]);
-      } catch (e) {
-        result[item.split('=')[0]] = '';
+    // Configuration des assembleurs supportés
+    this.assemblers = {
+      rasm: {
+        name: 'rasm',
+        options: '-oa -eo -utf8',
+        executable: 'rasm'
+      },
+      sjasmplus: {
+        name: 'sjasmplus',
+        options: '',
+        executable: 'sjasmplus'
+      },
+      uz80: {
+        name: 'uz80',
+        options: '',
+        executable: 'uz80'
       }
-    });
+    };
+
+    // Configuration des modes de build
+    this.buildModes = {
+      sna_cpc464: {
+        extension: 'sna',
+        headers: {
+          rasm: 'BUILDSNA V2 : BANKSET 0',
+          sjasmplus: ' DEVICE AMSTRADCPC464: org {startAddress}'
+        },
+        footers: {
+          sjasmplus: ' SAVECPCSNA "{outputFile}", {entryPoint}'
+        }
+      },
+      sna_cpc6128: {
+        extension: 'sna',
+        headers: {
+          rasm: 'BUILDSNA V2 : BANKSET 0',
+          sjasmplus: ' DEVICE AMSTRADCPC6128 : org {startAddress}'
+        },
+        footers: {
+          sjasmplus: ' SAVECPCSNA "{outputFile}", {entryPoint}'
+        }
+      },
+      sna: {
+        extension: 'sna',
+        headers: {
+          rasm: 'BUILDSNA V2 : BANKSET 0',
+          sjasmplus: ' DEVICE AMSTRADCPC6128 : org {startAddress}'
+        },
+        footers: {
+          sjasmplus: ' SAVECPCSNA "{outputFile}", {entryPoint}'
+        }
+      },
+      sna_zx48: {
+        extension: 'sna',
+        headers: {
+          sjasmplus: ' DEVICE ZXSPECTRUM48'
+        },
+        footers: {
+          sjasmplus: ' SAVESNA "{outputFile}", {entryPoint}'
+        }
+      },
+      sna_zx128: {
+        extension: 'sna',
+        headers: {
+          sjasmplus: ' DEVICE ZXSPECTRUM128'
+        },
+        footers: {
+          sjasmplus: ' SAVESNA "{outputFile}", {entryPoint}'
+        }
+      },
+      tap_zx48: {
+        extension: 'tap',
+        headers: {
+          sjasmplus: ' DEVICE ZXSPECTRUM48'
+        },
+        footers: {
+          sjasmplus: ' SAVETAP "{outputFile}", {entryPoint}'
+        }
+      },
+      dsk: {
+        extension: 'dsk',
+        headers: {},
+        footers: {}
+      },
+      bin: {
+        extension: 'bin',
+        headers: {},
+        footers: {}
+      }
+    };
+
+    this.setupMiddleware();
+    this.setupRoutes();
   }
-  return result;
-}
 
+  setupMiddleware() {
+    // Sécurité de base
+    this.app.use(helmet());
+    
+    // Rate limiting
+    const limiter = rateLimit({
+      windowMs: 15 * 60 * 1000, // 15 minutes
+      max: 100 // limite par IP
+    });
+    this.app.use('/api/', limiter);
 
-http.createServer(function (request, response) {
-  try {
-    // Website you wish to allow to connect
-    response.setHeader('Access-Control-Allow-Origin', '*');
-    // Request methods you wish to allow
-    //    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, PATCH, DELETE');
-    response.setHeader('Access-Control-Allow-Methods', 'GET, POST');
-    // Request headers you wish to allow
-    response.setHeader('Access-Control-Allow-Headers', 'X-Requested-With,content-type');
-    // Set to true if you need the website to include cookies in the requests sent
-    // to the API (e.g. in case you use sessions)
-    //response.setHeader('Access-Control-Allow-Credentials', true);
-
-    // handle POST Request, to assemble files
-
-    // URL format:
-    // command/main_filename?param1=value1&param2=value2...
-    // parameters:
-    // asm=[sjaspmlus|rasm|uz80]
-
-    // FIXME: globals....
-
-    if (request.method == 'POST') {
-
-      console.log('>>> POST request URL=', request.url);
-
-      if (request.url.length == 0) {
-        respError404(response);
+    // CORS configuré
+    this.app.use((req, res, next) => {
+      const origin = req.headers.origin;
+      if (this.config.allowedOrigins.includes('*') || this.config.allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin || '*');
+      }
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With');
+      
+      if (req.method === 'OPTIONS') {
+        res.sendStatus(200);
         return;
       }
+      next();
+    });
 
-      // Default variables
+    // Body parser
+    this.app.use(express.json({ limit: this.config.maxFileSize }));
+    this.app.use(express.text({ limit: this.config.maxFileSize }));
 
-      // asm used for building, among rasm, uz80 and sjasmplus
-      //let asm = 'rasm';
-
-      let p, cmd, pcmd, operation, params;
-
-      var fname;
-
-      // String returned by the assembler
-      let resStr = "";
-
-      let outputType = 'bin';
-      let outputFile = 'default';
-      let outputFileFullPath = outputpath + '/default';
-
-      // parse URL
-      // TODO: cleanup this code (use standard libs)
-      try {
-
-        params = getparams(request);
-
-        //if (params.assembler) asm=params.assembler;
-
-        if (!params.assembler) params.assembler = "rasm";
-        if (!params.buildmode) params.buildmode = "sna";
-        if (params.buildmode === "sna") params.buildmode = "sna_cpc464";
-        if (params.buildmode === "tap") params.buildmode = "tap_zx48";
-        if (!params.startAddress) params.startAddress = 0x1000;
-        if (!params.entryPoint) params.entryPoint = params.startAddress;
-
-
-        const extensions = {
-          sna_cpc464: 'sna',
-          sna_cpc6128: 'sna',
-          sna_zx48: 'sna',
-          sna_zx128: 'sna',
-          sna: 'tap',
-          tap: 'tap',
-          tap_zx48: 'tap',
-          dsk: 'dsk',
-          bin: 'bin',
-        };
-
-        outputType = params.buildmode;
-        // TODO: remove .asm 
-
-
-        outputFile = params.filename.replace(/.asm$/, '') + '.' + extensions[outputType];
-
-        outputFileFullPath = outputFile;
-
-        if (params.assembler !== 'rasm')
-          outputFileFullPath = outputpath + '/' + params.filename.replace(/.asm$/, '') + '.' + extensions[outputType];
-
-        console.info('params=', params);
-        console.info('outputType=', outputType);
-        console.info('File=', outputFile);
-
-        p = request.url.split('?');
-        cmd = p[0];
-        console.info('cmd=', cmd);
-        pcmd = cmd.split('/');
-
-        console.info('pcmd = ', pcmd);
-
-        operation = pcmd[1];
-        if (pcmd.length < 2) {
-          console.error('File name missing');
-        }
-        fname = pcmd[2];
-
-        if (operation != 'build' && operation != 'store') {
-          console.error('Wrong post command', operation);
-          respError404(response);
-          return;
-        }
-
-        //   if (p.length > 1)
-        //     params = p[1].split('&');
-
-      } catch (e) {
-        console.error('Error parsing URL', e.stack);
-        respError404(response);
-        return;
+    // Multer pour les uploads
+    const upload = multer({
+      limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+      fileFilter: (req, file, cb) => {
+        const allowedTypes = ['.asm', '.z80', '.inc'];
+        const ext = path.extname(file.originalname).toLowerCase();
+        cb(null, allowedTypes.includes(ext));
       }
+    });
+  //  this.upload = upload;
+  }
+
+  setupRoutes() {
+    // Route pour la compilation des fichiers
+    this.app.post('/api/assemble/:filename',this.handleAssemble.bind(this));
+    this.app.post('/api/store/:filename', this.handleStore.bind(this));
+    this.app.get('/api/assemblers', this.getAssemblers.bind(this));
+    this.app.get('/api/buildmodes', this.getBuildModes.bind(this));
 
 
-      // Si c'est un fichier DSK ou SNA, on le stocke
-      // Si c'est un fichier ASM, on le stocke et on execute l'assemblage
+    // File serving
+    this.app.get('/files/:filename', this.serveFile.bind(this));
+    this.app.get('/', this.serveIndex.bind(this));
+    
+    // Health check
+    this.app.get('/health', (req, res) => {
+      res.json({ status: 'ok', timestamp: new Date().toISOString() });
+    });
 
-      // Sinon on renvoie un objet qui contient
-      // - le status
-      // - le message de l'asm
-      // - le nom du fichier généré
-      // En mode data,on renvoie le binaire généré par rasm
-      // en cas de non erreur
-
-      var body = '';
-      request.on('data', function (data) {
-        body += data;
-      });
-
-      request.on('end', function () {
-        console.info('Body length:', body.length, 'bytes');
+    // Error handling
+    this.app.use(this.errorHandler.bind(this));
+  }
 
 
-        // Save file
-        let filePath = [inputpath, fname].join('/');
+ async handleAssemble(req, res) {
+    try {
+    const { filename, assembler, buildmode, startAddress, entryPoint, source } = req.body;
+    console.warn({ filename, assembler, buildmode, startAddress, entryPoint, source });
+      console.log("req.params = ",req.params);
+      console.log("req.query = ",req.query);
+      console.log("req.fbody = ",req.body);
+      
+      const buildParams={ filename, assembler, buildmode, startAddress, entryPoint};
 
-        // Add header and footer
-        const headers = {
-          sna_cpc464: {
-            rasm: 'BUILDSNA V2 : BANKSET 0',
-            sjasmplus: ' DEVICE AMSTRADCPC464: org ' + params.startAddress,
-            //            uz80: ''
-          },
-          sna_cpc6128: {
-            rasm: 'BUILDSNA V2 : BANKSET 0',
-            sjasmplus: ' DEVICE AMSTRADCPC6128 : org ' + params.startAddress,
-            //            uz80: ''
-          },
-          dsk: {
-            //            rasm: '',
-            sjasmplus: '',
-            //            uz80: ''
-          },
-          sna_zx48: {
-              sjasmplus: ' DEVICE ZXSPECTRUM48'
-          },
-          tap_zx48: {
-              sjasmplus: ' DEVICE ZXSPECTRUM48'
-          },
-          tap: {
-            sjasmplus: ' DEVICE ZXSPECTRUM48'
-          },
-          sna_zx128: {
-              sjasmplus: ' DEVICE ZXSPECTRUM128'
-          }
-        };
-
-        let header = '';
-        let footer = '';
-
-        if (params.noheader !== true) {
-          if (headers[params.buildmode]) {
-            if (headers[params.buildmode][params.assembler]) {
-              header = headers[params.buildmode][params.assembler] + '\n';
-              console.info('Adding header', header);
-            }
-          }
-
-
-          const footers = {
-            sna_cpc464: {
-              //                rasm: 'BUILDSNA V2 : BANKSET 0 : RUN '+params.entryPoint ,
-              sjasmplus: ' SAVECPCSNA "' + outputFileFullPath + '", ' + params.entryPoint,
-              //                uz80: ''
-            },
-            sna_cpc6128: {
-              //                rasm: 'BUILDSNA V2 : BANKSET 0\n',
-              sjasmplus: ' SAVECPCSNA "' + outputFileFullPath + '", ' + params.entryPoint,
-              //                uz80: ''
-            },
-            dsk: {
-            },
-            sna_zx48: {
-              sjasmplus: ' SAVESNA "' + outputFileFullPath + '", ' + params.entryPoint,
-            },
-            tap: {
-              sjasmplus: ' SAVETAP "' + outputFileFullPath + '", ' + params.entryPoint,
-            },
-            tap_zx48: {
-              sjasmplus: ' SAVETAP "' + outputFileFullPath + '", ' + params.entryPoint,
-            },
-            sna_zx128: {
-                sjasmplus: ' SAVESNA "' + outputFileFullPath + '", ' + params.entryPoint,
-            }
-          };
-
-          if (footers[params.buildmode]) {
-            if (footers[params.buildmode][params.assembler]) {
-              footer = footers[params.buildmode][params.assembler] + '\n';
-              console.info('Adding footer', footer);
-            }
-          }
-        }
-
-        body = header + body + footer;
-
-        console.info('Saving file', filePath);
-
-        fs.writeFile(filePath, body, function (error) {
-          if (error) {
-            console.error('Write Error', error);
-            respError(response, 'Write Error');
-            return;
-          }
-
-          // If only storing, exits now
-          if (operation != 'build') {
-            response.writeHead(200, {
-              'Content-Type': 'application/json'
-            });
-            response.end(JSON.stringify({ status: 'ok' }), 'utf-8');
-            return;
-          }
-
-
-
-
-
-
-          let options = '';
-
-          const asm_options = {
-            // -eo: if using DSK , insert file 
-            // -oa: output file is named after input file (FIXME!)
-            // -utf8: handles characters
-            rasm: '-oa -eo -utf8',
-            uz80: '',
-            sjasmplus: ''
-          };
-
-          if (asm_options.hasOwnProperty(params.assembler)) {
-            options = asm_options[params.assembler];
-          }
-
-          let asmcmd = [binpath, params.assembler].join('/');
-
-          let execcmd_array = [];
-          if (timeout_cmd.length > 0) execcmd_array.push(timeout_cmd);
-          execcmd_array.push(asmcmd);
-          execcmd_array.push(filePath);
-          execcmd_array.push(options);
-
-          // filter empty strings?
-          let execcmd = execcmd_array.join(' ');
-
-          console.info('Exec command', execcmd);
-
-          // On devrait executer depuis ./ et utiliser outputpath et inputpath relatifs a ce path
-
-          // --------------Execute Command
-          let d0 = Date.now();
-          let child = exec(execcmd, /*{ cwd: outputpath+'/' }*/);
-
-          child.stdout.on('data', function (data) {
-            console.error('std:', data);
-            resStr += data;
-          });
-
-          child.stderr.on('data', function (data) {
-            console.error('err:', data);
-            resStr += data;
-          });
-
-          child.on('close', function (code) {
-
-            let d1 = Date.now();
-
-            let resArr = resStr.split('\n');
-            let regex = new RegExp(fname, 'g');
-            let filtres = resArr;
-
-            // On cherche a recuperer le nom du fichier généré
-            // FIXME: méthod bancale, on devrait le savoir à l'avance :)
-            // FIXME: Ne marche que pour rasm
-
-            // TODO: utiliser le code js pour generer des snas
-
-            if (params.assembler === 'rasm') {
-
-              filtres = [];
-
-              //outputType = 'bin';
-              // parse rasm output (deprecated)
-              const typeStrings = [
-                ['bin', 'Write binary file '],
-                ['dsk', 'Write edsk file '],
-                ['sna', 'Write snapshot v3 file '],
-                ['sna', 'Write snapshot v2 file ']
-              ];
-
-              for (let j = 0; j < resArr.length; j++) {
-                let pline = resArr[j];
-                /*
-                for (let i = 0; i < typeStrings.length; i++) {
-                  //let binstr = typeStrings[i][1];
-                  //let i0 = pline.indexOf(binstr);
-  
-                  //if (i0 >= 0) {
-                   // outputType = typeStrings[i][0];
-                    //var subs = pline.substr(i0 + binstr.length);
-                    // On récupere le nom de fichier qui commence en i0+binstr.lengh, et qui va jusqu'au prochain espace ou retour chariot
-                   // outputFile = subs.split(' ')[0];
-                  //}
-  
-                }
-              */
-
-                // Filter output (ansi code) (rasm only)
-                let o = pline.replace(/.\[[0-9]+m/g, '');
-                //  Remplace le nom du fichier
-                o = o.replace(fname, "source");
-                if (o.length > 0)
-                  filtres.push(o);
-              }
-            }
-
-
-            const duration = d1 - d0;
-            // Deprecated (use result packet instead)
-            filtres.push('Assembled in ' + duration + 'ms');
-
-            const pckt = {
-              status: code,
-              output: outputFile,
-              outputType: outputType,
-              stdout: filtres,
-              src: fname,
-              date: Date.now(),
-              duration: duration
-            };
-
-            console.info("OUTPUT FILE=", outputFile);
-            console.info(JSON.parse(JSON.stringify(pckt)));
-
-            response.writeHead(200, {
-              'Content-Type': 'application/json'
-            });
-            response.end(JSON.stringify(pckt), 'utf-8');
-          }); //on close
-        });//write file
+      console.log(`Building ${filename} with params:`, buildParams);
+      
+      // Préparation du code source
+      const processedCode = this.processSourceCode(source, buildParams);
+      
+      // Sauvegarde du fichier
+      const inputFile = path.join(process.env.PWD,this.config.inputPath, filename);
+      await fs.writeFile(inputFile, processedCode, 'utf8');
+      
+      // Compilation
+      const result = await this.assembleFile(inputFile, buildParams);
+      
+      res.json(result);
+    } catch (error) {
+      console.error('Build error:', error);
+      res.status(500).json({ 
+        error: 'Build failed', 
+        message: error.message 
       });
     }
+}
 
-    /* 
-     * ----------------------------------------
-     *                SERVE FILES
-     * ----------------------------------------
-     */
-    // handle GET Request, to retrieve files
-    if (request.method == 'GET') {
-      let filePath = './index.html';
+  async handleStore(req, res) {
+    try {
+      const { filename } = req.params;
+      const content = req.body;
+      
+      const filePath = path.join(process.env.PWD,this.config.inputPath, filename);
+      await fs.writeFile(filePath, content, 'utf8');
+      
+      res.json({ 
+        status: 'ok', 
+        message: `File ${filename} stored successfully` 
+      });
+      
+    } catch (error) {
+      console.error('Store error:', error);
+      res.status(500).json({ 
+        error: 'Store failed', 
+        message: error.message 
+      });
+    }
+  }
 
-      // Safety filters
-      if (request.url.indexOf('..') > -1) {
-        console.error('URL contains ".."');
-        return;
+  validateBuildParams(query) {
+    const defaults = {
+      assembler: 'rasm',
+      buildmode: 'sna_cpc464',
+      startAddress: '0x1000',
+      entryPoint: null,
+      noheader: false
+    };
+
+    const params = { ...defaults, ...query };
+    
+    // Validation
+    if (!this.assemblers[params.assembler]) {
+      throw new Error(`Unsupported assembler: ${params.assembler}`);
+    }
+    
+    if (!this.buildModes[params.buildmode]) {
+      throw new Error(`Unsupported build mode: ${params.buildmode}`);
+    }
+    
+    // Conversion des valeurs
+    params.startAddress = parseInt(params.startAddress, 16) || parseInt(defaults.startAddress, 16);
+    params.entryPoint = params.entryPoint ? parseInt(params.entryPoint, 16) : params.startAddress;
+    params.noheader = params.noheader === 'true' || params.noheader === true;
+    
+    return params;
+  }
+
+  processSourceCode(sourceCode, params) {
+    if (params.noheader) {
+      return sourceCode;
+    }
+
+    const buildMode = this.buildModes[params.buildmode];
+    const assembler = params.assembler;
+    
+    // Génération header
+    let header = '';
+    if (buildMode.headers[assembler]) {
+      header = this.templateReplace(buildMode.headers[assembler], params) + '\n';
+    }
+    
+    // Génération footer
+    let footer = '';
+    if (buildMode.footers[assembler]) {
+      const outputFile = this.generateOutputFilename(params);
+      const footerParams = { ...params, outputFile };
+      footer = '\n' + this.templateReplace(buildMode.footers[assembler], footerParams);
+    }
+    
+    return header + sourceCode + footer;
+  }
+
+  templateReplace(template, params) {
+    return template.replace(/\{(\w+)\}/g, (match, key) => {
+      return params[key] !== undefined ? params[key] : match;
+    });
+  }
+
+  generateOutputFilename(params) {
+    const buildMode = this.buildModes[params.buildmode];
+    const baseName = params.filename ? params.filename.replace(/\.asm$/, '') : 'output';
+    return `${baseName}.${buildMode.extension}`;
+  }
+
+  async assembleFile(inputFile, params) {
+    const startTime = Date.now();
+    
+    const assembler = this.assemblers[params.assembler];
+    const asmPath = path.join(this.config.binPath, assembler.executable);
+    
+    // Construction de la commande
+    const cmdArgs = [inputFile];
+    if (assembler.options) {
+      cmdArgs.push(...assembler.options.split(' ').filter(arg => arg.length > 0));
+    }
+    
+    console.log(`Executing: ${asmPath} ${cmdArgs.join(' ')}`);
+    
+    try {
+      const result = await this.executeWithLimits(asmPath, cmdArgs, {
+        cwd: this.config.outputPath,
+        timeout: this.config.maxExecutionTime,
+        maxMemoryMB: this.config.maxMemoryMB
+      });
+      
+      const duration = Date.now() - startTime;
+      const outputFile = this.generateOutputFilename(params);
+      
+      // Parse de la sortie pour rasm
+      const output = this.parseAssemblerOutput(result.stdout + result.stderr, params.assembler, inputFile);
+      
+      return {
+        status: 0,
+        success: true,
+        output: outputFile,
+        outputType: params.buildmode,
+        stdout: output,
+        duration,
+        memoryPeak: result.memoryPeak,
+        timestamp: new Date().toISOString()
+      };
+      
+    } catch (error) {
+      const duration = Date.now() - startTime;
+      
+      let errorType = 'compilation_error';
+      if (error.killed) {
+        if (error.signal === 'SIGTERM' || error.signal === 'SIGKILL') {
+          errorType = error.reason === 'memory' ? 'memory_limit_exceeded' : 'timeout';
+        }
       }
+      
+      return {
+        status: error.code || 1,
+        success: false,
+        error: error.message,
+        errorType,
+        stdout: error.stdout ? error.stdout.split('\n') : [],
+        stderr: error.stderr ? error.stderr.split('\n') : [],
+        duration,
+        memoryPeak: error.memoryPeak || 0,
+        timestamp: new Date().toISOString()
+      };
+    }
+  }
 
-      let p = request.url.split('?');
-      let fname = p[0];
+  async executeWithLimits(command, args, options = {}) {
+    return new Promise((resolve, reject) => {
+      const {
+        cwd = process.cwd(),
+        timeout = this.config.maxExecutionTime,
+        maxMemoryMB = this.config.maxMemoryMB
+      } = options;
 
-      // URL format
-      // filename?param=1&param2=value2  
-      // Parameters are ignored
+      let stdout = '';
+      let stderr = '';
+      let memoryPeak = 0;
+      let memoryCheckTimer = null;
+      let timeoutTimer = null;
+      let isKilled = false;
+      let killReason = null;
+console.log("Commande", command, args);
 
-      if (request.url.length > 1)
-        filePath = outputpath + '/' + fname;
+console.log( process.env.PATH );
+console.log( process.env.PWD );
 
-      let extname = path.extname(filePath);
-      let contentType = 'text/html';
+// Spawn du processus
+      const child = spawn(path.join(process.env.PWD,command), args, {
+        cwd,
+        stdio: ['pipe', 'pipe', 'pipe']
+      });
 
-      switch (extname) {
-        case '.js':
-          contentType = 'text/javascript';
-          break;
-        case '.css':
-          contentType = 'text/css';
-          break;
-        case '.json':
-          contentType = 'application/json';
-          break;
-        case '.png':
-          contentType = 'image/png';
-          break;
-        case '.jpg':
-          contentType = 'image/jpg';
-          break;
-        case '.wav':
-          contentType = 'audio/wav';
-          break;
-        case '.ico':
-          contentType = 'image/x-icon';
-          break;
-        case '.wasm':
-          contentType = 'application/wasm';
-          break;
-        case '.dsk':
-        case '.bin':
-        case '.sna':
-        case '.tap':
-        case '.z80':
-            contentType = 'application/octet-stream';
-          break;
-      }
+      console.log(`Started process PID: ${child.pid}`);
 
-      console.info('GET', request.url, fname, filePath, extname, contentType);
+      // Gestion des sorties
+      child.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
 
-      fs.readFile(filePath, function (error, content) {
-        if (error) {
-          if (error.code == 'ENOENT') {
-            respError(response);
-          } else {
-            response.writeHead(500);
-            response.end('Error: ' + error.code + ' ..\n');
-            response.end();
+      child.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      // Monitoring de la mémoire
+      const checkMemory = async () => {
+        if (isKilled || !child.pid) return;
+
+        try {
+          const stats = await pidusage(child.pid);
+          const memoryMB = Math.round(stats.memory / 1024 / 1024);
+          
+          if (memoryMB > memoryPeak) {
+            memoryPeak = memoryMB;
           }
+
+          console.log(`Process ${child.pid} - Memory: ${memoryMB}MB, CPU: ${stats.cpu.toFixed(1)}%`);
+
+          if (memoryMB > maxMemoryMB) {
+            console.warn(`Process ${child.pid} exceeded memory limit: ${memoryMB}MB > ${maxMemoryMB}MB`);
+            killReason = 'memory';
+            this.killProcess(child, 'Memory limit exceeded');
+            return;
+          }
+
+          // Programmer la prochaine vérification
+          if (!isKilled) {
+            memoryCheckTimer = setTimeout(checkMemory, this.config.memoryCheckInterval);
+          }
+
+        } catch (error) {
+          // Le processus a probablement terminé
+          if (error.code !== 'ESRCH') {
+            console.warn(`Memory check failed for PID ${child.pid}:`, error.message);
+          }
+        }
+      };
+
+      // Démarrer le monitoring mémoire
+      memoryCheckTimer = setTimeout(checkMemory, this.config.memoryCheckInterval);
+
+      // Timer de timeout
+      timeoutTimer = setTimeout(() => {
+        if (!isKilled) {
+          console.warn(`Process ${child.pid} timed out after ${timeout}ms`);
+          killReason = 'timeout';
+          this.killProcess(child, 'Execution timeout');
+        }
+      }, timeout);
+
+      // Gestion de la fin du processus
+      child.on('close', (code, signal) => {
+        // Nettoyage des timers
+        if (memoryCheckTimer) {
+          clearTimeout(memoryCheckTimer);
+          memoryCheckTimer = null;
+        }
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+          timeoutTimer = null;
+        }
+
+        console.log(`Process ${child.pid} finished - Code: ${code}, Signal: ${signal}, Memory peak: ${memoryPeak}MB`);
+
+        if (isKilled) {
+          const error = new Error(`Process killed: ${killReason}`);
+          error.killed = true;
+          error.signal = signal;
+          error.reason = killReason;
+          error.code = code;
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.memoryPeak = memoryPeak;
+          reject(error);
+        } else if (code === 0) {
+          resolve({
+            stdout,
+            stderr,
+            code,
+            memoryPeak
+          });
         } else {
-          response.writeHead(200, {
-            'Content-Type': contentType
-          });
-          response.end(content, 'utf-8');
+          const error = new Error(`Process exited with code ${code}`);
+          error.code = code;
+          error.stdout = stdout;
+          error.stderr = stderr;
+          error.memoryPeak = memoryPeak;
+          reject(error);
         }
       });
 
-    }
-  } catch (e) {
-    console.error(e.stack);
-  }
-}).listen(8125);
+      child.on('error', (error) => {
+        // Nettoyage des timers
+        if (memoryCheckTimer) {
+          clearTimeout(memoryCheckTimer);
+        }
+        if (timeoutTimer) {
+          clearTimeout(timeoutTimer);
+        }
 
-console.log('Server running at http://127.0.0.1:8125/');
+        console.error(`Process ${child.pid} error:`, error);
+        error.memoryPeak = memoryPeak;
+        reject(error);
+      });
+    });
+  }
+
+  killProcess(child, reason) {
+    if (!child.pid || child.killed) {
+      return;
+    }
+
+    console.log(`Killing process ${child.pid}: ${reason}`);
+    
+    try {
+      // D'abord essayer SIGTERM (terminaison propre)
+      process.kill(child.pid, 'SIGTERM');
+      
+      // Si le processus ne se termine pas dans les 5 secondes, utiliser SIGKILL
+      setTimeout(() => {
+        try {
+          if (!child.killed) {
+            console.log(`Force killing process ${child.pid} with SIGKILL`);
+            process.kill(child.pid, 'SIGKILL');
+          }
+        } catch (error) {
+          // Le processus est probablement déjà terminé
+          console.log(`Process ${child.pid} already terminated`);
+        }
+      }, this.config.killSignalTimeout);
+      
+    } catch (error) {
+      console.error(`Failed to kill process ${child.pid}:`, error);
+    }
+  }
+
+  parseAssemblerOutput(output, assembler, inputFile) {
+    const lines = output.split('\n').filter(line => line.trim());
+    
+    if (assembler === 'rasm') {
+      // Nettoyage des codes ANSI pour rasm
+      return lines.map(line => {
+        return line
+          .replace(/\x1b\[[0-9]+m/g, '') // Supprime codes ANSI
+          .replace(new RegExp(path.basename(inputFile), 'g'), 'source');
+      }).filter(line => line.length > 0);
+    }
+    
+    return lines;
+  }
+
+  async serveFile(req, res) {
+    try {
+      const { filename } = req.params;
+      // Validation de sécurité
+      if (filename.includes('..') || filename.includes('/')) {
+        return res.status(400).json({ error: 'Invalid filename' });
+      }
+      
+      const filePath = path.join(this.config.outputPath, filename);
+      
+      // Vérification existence
+      try {
+        await fs.access(filePath);
+      } catch {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      
+      // Détermination du type MIME
+      const ext = path.extname(filename).toLowerCase();
+      const mimeTypes = {
+        '.js': 'text/javascript',
+        '.css': 'text/css',
+        '.json': 'application/json',
+        '.png': 'image/png',
+        '.jpg': 'image/jpeg',
+        '.wav': 'audio/wav',
+        '.ico': 'image/x-icon',
+        '.wasm': 'application/wasm',
+        '.dsk': 'application/octet-stream',
+        '.bin': 'application/octet-stream',
+        '.sna': 'application/octet-stream',
+        '.tap': 'application/octet-stream',
+        '.z80': 'application/octet-stream'
+      };
+      
+      const contentType = mimeTypes[ext] || 'text/plain';
+      
+      // Headers de cache pour les fichiers binaires
+      if (['.dsk', '.bin', '.sna', '.tap', '.z80'].includes(ext)) {
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      }
+      
+      res.setHeader('Content-Type', contentType);
+      
+      const fileContent = await fs.readFile(filePath);
+      res.send(fileContent);
+      
+    } catch (error) {
+      console.error('File serve error:', error);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+
+  async serveIndex(req, res) {
+    try {
+      const indexPath = './index.html';
+      const content = await fs.readFile(indexPath, 'utf8');
+      res.setHeader('Content-Type', 'text/html');
+      res.send(content);
+    } catch {
+      res.status(404).send('Index file not found');
+    }
+  }
+
+  getAssemblers(req, res) {
+    const assemblerList = Object.keys(this.assemblers).map(key => ({
+      id: key,
+      name: this.assemblers[key].name,
+      executable: this.assemblers[key].executable
+    }));
+    
+    res.json({ assemblers: assemblerList });
+  }
+
+  getBuildModes(req, res) {
+    const buildModeList = Object.keys(this.buildModes).map(key => ({
+      id: key,
+      extension: this.buildModes[key].extension,
+      description: key.replace(/_/g, ' ').toUpperCase()
+    }));
+    
+    res.json({ buildModes: buildModeList });
+  }
+
+  errorHandler(error, req, res, next) {
+    console.error('Unhandled error:', error);
+    
+    if (res.headersSent) {
+      return next(error);
+    }
+    
+    res.status(500).json({
+      error: 'Internal server error',
+      message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
+    });
+  }
+
+  async start() {
+    try {
+      // Vérification des dossiers
+      await this.ensureDirectories();
+      
+      this.app.listen(this.port, () => {
+        console.log(`🚀 Z80 Assembler Server running on port ${this.port}`);
+        console.log(`📁 Input path: ${this.config.inputPath}`);
+        console.log(`📁 Output path: ${this.config.outputPath}`);
+        console.log(`🔧 Binary path: ${this.config.binPath}`);
+        console.log(`🔗 API available at http://localhost:${this.port}/api/`);
+      });
+      
+    } catch (error) {
+      console.error('Failed to start server:', error);
+      process.exit(1);
+    }
+  }
+
+  async ensureDirectories() {
+    const dirs = [this.config.inputPath, this.config.outputPath];
+    
+    for (const dir of dirs) {
+      try {
+        await fs.mkdir(dir, { recursive: true });
+      } catch (error) {
+        if (error.code !== 'EEXIST') {
+          throw error;
+        }
+      }
+    }
+  }
+}
+
+// Démarrage du serveur
+if (require.main === module) {
+  const server = new Z80AssemblerServer();
+  server.start();
+}
+
+module.exports = Z80AssemblerServer;

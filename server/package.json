@@ -11,5 +11,12 @@
     "Z80"
   ],
   "author": "Stephane Sikora",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "express": "^5.1.0",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.1.0",
+    "multer": "^2.0.0",
+    "pidusage": "^4.0.1"
+  }
 }
